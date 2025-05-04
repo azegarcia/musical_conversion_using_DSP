@@ -1,155 +1,142 @@
-from flask import Flask, request, render_template_string, send_file
 import os
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.fft import fft, fftfreq
-import scipy.io.wavfile as wav
 import json
-from music21 import stream, note, chord, midi, converter
-import tempfile
-
-# Load notes mapping once
-NOTES_MAP = json.load(open("notes_map.json", "r"))
+import time
+import subprocess
+from flask import Flask, render_template, request, redirect, url_for, send_file, jsonify
+from werkzeug.utils import secure_filename
+import numpy as np
+import scipy.io.wavfile as wav
+from scipy.fft import fft, fftfreq
+from music21 import *
+import matplotlib.pyplot as plt
 
 app = Flask(__name__)
-UPLOAD_FOLDER = os.path.dirname(os.path.abspath(__file__))
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['UPLOAD_FOLDER'] = 'uploads'
+ALLOWED_EXTENSIONS = {'wav'}
 
-# HTML Template
-HTML_TEMPLATE = '''
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>WAV to MIDI and Sheet</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light">
-<div class="container py-5">
-  <div class="row justify-content-center">
-    <div class="col-lg-6">
-      <div class="card shadow">
-        <div class="card-body">
-          <h2 class="card-title text-center mb-4">Upload a WAV File</h2>
-          <form method="POST" enctype="multipart/form-data">
-            <div class="mb-3">
-              <input class="form-control" type="file" name="file" accept=".wav" required>
-            </div>
-            <div class="d-grid">
-              <button class="btn btn-primary" type="submit">Upload & Process</button>
-            </div>
-          </form>
-          {% if message %}
-          <div class="alert alert-info mt-4">{{ message|safe }}</div>
-          {% endif %}
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-</body>
-</html>
-'''
+# Create upload folder if it doesn't exist
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Core function to process WAV
-def process_wav(file_path, output_dir):
-    DURATION = 300  # in seconds
+# Check file extension
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-    SAMPLE_RATE, data = wav.read(file_path)
+def pitch_to_lilypond(note):
+    base_map = {'C': 'c', 'D': 'd', 'E': 'e', 'F': 'f', 'G': 'g', 'A': 'a', 'B': 'b'}
+    accidental_map = {'#': 'is', 'b': 'es'}
+    
+    if len(note) == 2:
+        pitch, octave = note[0], int(note[1])
+        accidental = ''
+    else:
+        pitch, accidental, octave = note[0], note[1], int(note[2])
+        accidental = accidental_map.get(accidental, '')
 
-    # Plot time domain
-    t = 1 * np.arange(SAMPLE_RATE * DURATION)
-    # plt.figure()
-    plt.plot(t, data[:SAMPLE_RATE * DURATION])
-    plt.title('Magnitude over Time')
-    plt.savefig(os.path.join(output_dir, 'magnitude.png'))
+    lily_note = base_map[pitch] + accidental
+    offset = octave - 3
+    lily_note += "'" * offset if offset > 0 else "," * abs(offset)
+    return lily_note + "4"
+
+def identify_instrument(instrument):
+    return {
+        "Bass": "bass_map.json",
+        "Flute": "flute_map.json",
+        "Piano": "notes_map.json",
+        "Saxophone": "saxo_map.json",
+        "Violin": "violin_map.json"
+    }.get(instrument, "notes_map.json")
+
+def process_audio(filepath, instrument):
+    environment.UserSettings()['lilypondPath'] =  'C:/LilyPond/usr/bin/lilypond.exe'
+
+    notes_map_file = identify_instrument(instrument)
+    NOTES_MAP = json.load(open(notes_map_file, "r"))
+    
+    SAMPLE_RATE, data = wav.read(filepath)
+    DURATION = len(data) // SAMPLE_RATE
+
+    t = np.arange(SAMPLE_RATE * DURATION)
+    plt.plot(t, data[:SAMPLE_RATE*DURATION])
+    plt.savefig('static/magnitude.png')
     plt.close()
 
-    # FFT and frequency domain plot
-    yf = fft(data[:SAMPLE_RATE * DURATION])
-    xf = fftfreq(SAMPLE_RATE * DURATION, 1 / SAMPLE_RATE)
-    # plt.figure()
+    yf = fft(data[:SAMPLE_RATE*DURATION])
+    xf = fftfreq(SAMPLE_RATE*DURATION, 1 / SAMPLE_RATE)
     plt.plot(xf, np.abs(yf))
-    plt.xlim([0, 3000])
-    plt.title('Frequency Spectrum')
-    plt.savefig(os.path.join(output_dir, 'frequency.png'))
+    plt.xlim([0, 3e3])
+    plt.savefig('static/frequency.png')
     plt.close()
 
-    # Map frequencies to magnitude
     y = np.abs(yf)
-    d = {xf[i]: y[i] for i in range(len(y)) if xf[i] > 0}
-    d = sorted(d, reverse=True)
+    d = {f"{xf[i]}": y[i] for i in range(len(y)) if xf[i] > 0}
+    d = sorted(d, key=lambda x: float(x), reverse=True)
 
-    # Top notes
     bucket = []
-    for freq, _ in d:
-        freq_rounded = round(freq)
-        if freq_rounded not in bucket:
-            bucket.append(freq_rounded)
+    for i in d:
+        val = round(float(i))
+        if val not in bucket:
+            bucket.append(val)
 
-    notes_found = []
+    notes = []
     for freq in bucket:
-        for note_name, note_freq in NOTES_MAP.items():
+        for note, note_freq in NOTES_MAP.items():
             if freq - 4 < note_freq < freq + 4:
-                notes_found.append(note_name)
+                notes.append(note)
                 break
 
-    # Create chord
-    s = stream.Stream()
-    c = chord.Chord(list(set(notes_found)))
-    c.quarterLength = 2
-    s.append(c)
+    lilypond_notes = [pitch_to_lilypond(n) for n in notes]
+    note_string = ' '.join(lilypond_notes)
 
-    # Save MIDI
-    midi_file_path = os.path.join(output_dir, 'audio_output.mid')
-    mf = midi.translate.streamToMidiFile(s)
-    mf.open(midi_file_path, 'wb')
-    mf.write()
-    mf.close()
+    ly_content = f"""
+\\version "2.22.2"
+\\score {{
+  \\new Staff {{
+    \\clef bass
+    \\time 4/4
+    \\tempo 4 = 80
+    {note_string}
+  }}
+  \\layout {{ }}
+}}
+"""
+    with open("output.ly", "w") as f:
+        f.write(ly_content)
 
-    # Save MusicXML
-    midi_stream = converter.parse(midi_file_path)
-    xml_file_path = os.path.join(output_dir, 'output.xml')
-    midi_stream.write('musicxml', fp=xml_file_path)
+    try:
+        subprocess.run(["C:\\LilyPond\\usr\\bin\\lilypond.exe", "output.ly"], check=True)
+        return "output.pdf"
+    except subprocess.CalledProcessError:
+        return None
 
-    return midi_file_path, xml_file_path
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-@app.route('/', methods=['GET', 'POST'])
-def upload_file():
-    message = None
-    if request.method == 'POST':
-        if 'file' not in request.files:
-            message = "No file uploaded."
-        else:
-            file = request.files['file']
-            if file.filename == '':
-                message = "No file selected."
-            elif file and file.filename.endswith('.wav'):
-                # Save uploaded file temporarily
-                temp_dir = tempfile.mkdtemp()
-                temp_path = os.path.join(temp_dir, file.filename)
-                file.save(temp_path)
+@app.route('/upload', methods=['POST'])
+def upload():
+    file = request.files.get('file')
+    instrument = request.form.get('instrument')
 
-                try:
-                    midi_path, xml_path = process_wav(temp_path, UPLOAD_FOLDER)
-                    message = f'Processing complete!<br>' \
-                              f'<a href="/download/midi">Download MIDI</a><br>' \
-                              f'<a href="/download/xml">Download MusicXML</a><br>' \
-                              f'<img src="/static/magnitude.png" class="img-fluid mt-3"><br>' \
-                              f'<img src="/static/frequency.png" class="img-fluid mt-3">'
-                except Exception as e:
-                    message = f"An error occurred: {e}"
+    if not file or file.filename == '' or not allowed_file(file.filename):
+        return "Invalid file", 400
 
-    return render_template_string(HTML_TEMPLATE, message=message)
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(filepath)
 
-@app.route('/download/<filetype>')
-def download_file(filetype):
-    if filetype == 'midi':
-        return send_file(os.path.join(UPLOAD_FOLDER, 'audio_output.mid'), as_attachment=True)
-    elif filetype == 'xml':
-        return send_file(os.path.join(UPLOAD_FOLDER, 'output.xml'), as_attachment=True)
+    pdf = process_audio(filepath, instrument)
+    if pdf:
+        return redirect(url_for('result'))
     else:
-        return "Invalid download type.", 400
+        return "Error generating PDF", 500
+
+@app.route('/result')
+def result():
+    return render_template('result.html', pdf_file='output.pdf')
+
+@app.route('/pdf/<filename>')
+def serve_pdf(filename):
+    return send_file(filename, as_attachment=False)
 
 if __name__ == '__main__':
     app.run(debug=True)

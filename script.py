@@ -5,11 +5,48 @@ import scipy.io.wavfile as wav
 import json
 from music21 import *
 import matplotlib.pyplot as plt
-import sys
 import time
 import subprocess
 
-NOTES_MAP = json.load(open("notes_map.json", "r"))
+def identify_instrument():
+  if instrument == "Bass":
+    notes_map = "bass_map.json"
+  elif instrument == "Flute":
+    notes_map = "flute_map.json"
+  elif instrument == "Piano":
+    notes_map = "notes_map.json"
+  elif instrument == "Saxophone":
+    notes_map = "saxo_map.json"
+  else:
+    notes_map = "violin_map.json"
+  
+  return notes_map
+
+def pitch_to_lilypond(note):
+    base_map = {'C': 'c', 'D': 'd', 'E': 'e', 'F': 'f', 'G': 'g', 'A': 'a', 'B': 'b'}
+    accidental_map = {'#': 'is', 'b': 'es'}
+    
+    # Split pitch and octave
+    if len(note) == 2:
+        pitch, octave = note[0], int(note[1])
+        accidental = ''
+    else:
+        pitch, accidental, octave = note[0], note[1], int(note[2])
+        accidental = accidental_map.get(accidental, '')
+
+    lily_note = base_map[pitch] + accidental
+    
+    # Determine octave offset (C4 = c')
+    offset = octave - 3
+    if offset > 0:
+        lily_note += "'" * offset
+    elif offset < 0:
+        lily_note += "," * abs(offset)
+    
+    return lily_note + "4"  # quarter note
+  
+notes_map = identify_instrument()
+NOTES_MAP = json.load(open(notes_map, "r"))
 environment.UserSettings()['lilypondPath'] =  'C:/Lilypond/usr/bin/lilypond.exe'
 start = time.time()
 
@@ -21,6 +58,7 @@ SAMPLE_RATE, data = wav.read(wav_file)
 # Plot the time domain
 t = 1 * np.arange(SAMPLE_RATE*DURATION)
 plt.plot(t, data[:SAMPLE_RATE*DURATION])
+
 # magnitude graph
 print("Plotting magnitudes..")
 plt.savefig('magnitude.png')
@@ -34,7 +72,6 @@ plt.savefig('frequency.png')
 
 # Map frequencies to magnitude
 y = np.abs(yf)
-
 d = {}
 for i in range(0, len(y)):
   if xf[i] > 0:
@@ -67,29 +104,6 @@ for i in bucket:
 print("Mapped Notes: {}".format(notes))
 
 #========================================================Lilypond part
-def pitch_to_lilypond(note):
-    base_map = {'C': 'c', 'D': 'd', 'E': 'e', 'F': 'f', 'G': 'g', 'A': 'a', 'B': 'b'}
-    accidental_map = {'#': 'is', 'b': 'es'}
-    
-    # Split pitch and octave
-    if len(note) == 2:
-        pitch, octave = note[0], int(note[1])
-        accidental = ''
-    else:
-        pitch, accidental, octave = note[0], note[1], int(note[2])
-        accidental = accidental_map.get(accidental, '')
-
-    lily_note = base_map[pitch] + accidental
-    
-    # Determine octave offset (C4 = c')
-    offset = octave - 3
-    if offset > 0:
-        lily_note += "'" * offset
-    elif offset < 0:
-        lily_note += "," * abs(offset)
-    
-    return lily_note + "4"  # quarter note
-
 lilypond_notes = [pitch_to_lilypond(n) for n in notes]
 note_string = ' '.join(lilypond_notes)
 

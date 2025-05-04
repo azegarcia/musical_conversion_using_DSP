@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload Audio</title>
+    <script>
+        function showProgress() {
+            document.getElementById("progress").style.display = "block";
+        }
+    </script>
+    <style>
+        #progress {
+            display: none;
+            width: 100%;
+            background-color: #f3f3f3;
+            margin-top: 20px;
+        }
+        #bar {
+            width: 0%;
+            height: 30px;
+            background-color: #4CAF50;
+            animation: progress 10s forwards;
+        }
+        @keyframes progress {
+            from { width: 0%; }
+            to { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <h1>Upload Audio and Select Instrument</h1>
+    <form action="/upload" method="post" enctype="multipart/form-data" onsubmit="showProgress()">
+        <label>Audio File (.wav):</label><br>
+        <input type="file" name="file" required><br><br>
+
+        <label>Choose Instrument:</label><br>
+        <input type="radio" name="instrument" value="Bass" checked> Bass<br>
+        <input type="radio" name="instrument" value="Flute"> Flute<br>
+        <input type="radio" name="instrument" value="Piano"> Piano<br>
+        <input type="radio" name="instrument" value="Saxophone"> Saxophone<br>
+        <input type="radio" name="instrument" value="Violin"> Violin<br><br>
+
+        <input type="submit" value="Submit">
+    </form>
+
+    <div id="progress">
+        <div id="bar"></div>
+        <p>Processing... please wait.</p>
+    </div>
+</body>
+</html>

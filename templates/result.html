@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Result</title>
+</head>
+<body>
+    <h1>Generated Sheet Music</h1>
+    <iframe src="{{ url_for('serve_pdf', filename=pdf_file) }}" width="100%" height="600px"></iframe>
+    <br>
+    <a href="/">Upload Another</a>
+</body>
+</html>
