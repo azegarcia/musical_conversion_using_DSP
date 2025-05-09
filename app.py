@@ -1,21 +1,34 @@
 import os
 import json
-import time
 import subprocess
-from flask import Flask, render_template, request, redirect, url_for, send_file, jsonify
+from flask import Flask, render_template, request, redirect, url_for, send_file
 from werkzeug.utils import secure_filename
+from pydub import AudioSegment
 import numpy as np
 import scipy.io.wavfile as wav
 from scipy.fft import fft, fftfreq
 from music21 import *
+import matplotlib
+matplotlib.use('Agg')  # Use the 'Agg' backend for non-GUI operations
 import matplotlib.pyplot as plt
+
+environment.UserSettings()['lilypondPath'] =  'C:/LilyPond/usr/bin/lilypond.exe'
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
-ALLOWED_EXTENSIONS = {'wav'}
+ALLOWED_EXTENSIONS = {'wav', 'mp3', 'webm'}
 
 # Create upload folder if it doesn't exist
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+def ensure_wav_format(input_path):
+    ext = input_path.rsplit('.', 1)[-1].lower()
+    if ext == 'wav':
+        return input_path  # Already WAV
+    audio = AudioSegment.from_file(input_path)
+    wav_path = input_path.rsplit('.', 1)[0] + ".wav"
+    audio.export(wav_path, format="wav")
+    return wav_path
 
 # Check file extension
 def allowed_file(filename):
@@ -46,9 +59,21 @@ def identify_instrument(instrument):
         "Violin": "violin_map.json"
     }.get(instrument, "notes_map.json")
 
+def identify_clef(instrument):
+    if instrument == "Flute":
+        clef = "clef treble"
+    elif instrument == "Piano":
+        clef = "clef treble"
+    elif instrument == "Saxophone":
+        clef = "clef treble"
+    elif instrument == "Bass":
+        clef = "clef bass"
+    else:
+        clef = "clef treble"
+        
+    return clef
+        
 def process_audio(filepath, instrument):
-    environment.UserSettings()['lilypondPath'] =  'C:/LilyPond/usr/bin/lilypond.exe'
-
     notes_map_file = identify_instrument(instrument)
     NOTES_MAP = json.load(open(notes_map_file, "r"))
     
@@ -87,18 +112,28 @@ def process_audio(filepath, instrument):
     lilypond_notes = [pitch_to_lilypond(n) for n in notes]
     note_string = ' '.join(lilypond_notes)
 
+    title = filepath.split(".")[0]
+    clef = identify_clef(instrument)
     ly_content = f"""
-\\version "2.22.2"
-\\score {{
-  \\new Staff {{
-    \\clef bass
-    \\time 4/4
-    \\tempo 4 = 80
-    {note_string}
-  }}
-  \\layout {{ }}
-}}
-"""
+    \\version "2.22.2"
+    \\header {{
+        title = "{title.split('\\')[-1]}"
+        subtitle = "Instrument: {instrument}"
+        composer = ""
+        arranger = ""
+        opus = "Op. 1"
+        }}
+    \\score {{
+    \\new Staff {{
+        \\{clef}
+        \\time 4/4
+        \\tempo 4 = 80
+        {note_string}
+    }}
+    \\layout {{ }}
+    }}
+    """
+    
     with open("output.ly", "w") as f:
         f.write(ly_content)
 
@@ -123,6 +158,9 @@ def upload():
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     file.save(filepath)
+
+    # Convert to WAV regardless of format
+    filepath = ensure_wav_format(filepath)
 
     pdf = process_audio(filepath, instrument)
     if pdf:

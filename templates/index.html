@@ -1,50 +1,216 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Upload Audio</title>
-    <script>
-        function showProgress() {
-            document.getElementById("progress").style.display = "block";
-        }
-    </script>
+    <meta charset="UTF-8">
+    <title>E-notes</title>
     <style>
-        #progress {
+        header {
+            background-color: #f0f0f0;
+            padding: 20px;
+            text-align: center;
+            border-bottom: 2px solid #ccc;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-family: Arial, sans-serif;
+        }
+        #progressContainer {
+            width: 50%;
+            margin: 20px auto;
+            background-color: white;
+            border: 1px solid white;
+            border-radius: 5px;
             display: none;
-            width: 100%;
-            background-color: #f3f3f3;
-            margin-top: 20px;
         }
-        #bar {
+        #progressBar {
             width: 0%;
-            height: 30px;
-            background-color: #4CAF50;
-            animation: progress 10s forwards;
-        }
-        @keyframes progress {
-            from { width: 0%; }
-            to { width: 100%; }
+            height: 20px;
+            background-color: #4caf50;
+            border-radius: 5px;
         }
     </style>
 </head>
 <body>
-    <h1>Upload Audio and Select Instrument</h1>
-    <form action="/upload" method="post" enctype="multipart/form-data" onsubmit="showProgress()">
-        <label>Audio File (.wav):</label><br>
-        <input type="file" name="file" required><br><br>
+    <header>
+        <h1>E NOTES: AN APPLICATION CONVERSION OF MUSIC INTO MUSICAL SHEETS OF COMMON BAND INSTRUMENTS USING DIGITAL SIGNAL PROCESSING</h1>
+    </header>
+    <br>
+    <h1>Upload your Music:</h1>
+    <center>
+        <form id="uploadForm" action="/upload" method="post" enctype="multipart/form-data">
+            <label for="instrument">Instrument:</label>
+            <select name="instrument" id="instrument" required>
+                <option value="Piano">Piano</option>
+                <option value="Bass">Bass</option>
+                <option value="Flute">Flute</option>
+                <option value="Saxophone">Saxophone</option>
+                <option value="Violin">Violin</option>
+            </select><br><br>
 
-        <label>Choose Instrument:</label><br>
-        <input type="radio" name="instrument" value="Bass" checked> Bass<br>
-        <input type="radio" name="instrument" value="Flute"> Flute<br>
-        <input type="radio" name="instrument" value="Piano"> Piano<br>
-        <input type="radio" name="instrument" value="Saxophone"> Saxophone<br>
-        <input type="radio" name="instrument" value="Violin"> Violin<br><br>
+            <label>Select File:</label>
+            <input type="file" name="file" accept=".mp3,.wav"><br><br>
 
-        <input type="submit" value="Submit">
-    </form>
-
-    <div id="progress">
-        <div id="bar"></div>
-        <p>Processing... please wait.</p>
+            <input type="submit" value="Upload">
+        </form>
+    </center>
+    <br><hr><br>
+    <h1>Record your Music:</h1>
+    <center>
+        <audio id="audio" controls></audio><br><br>
+        <button id="recordBtn">Start Recording</button>
+        <button id="stopBtn" disabled>Stop Recording</button>
+        <button id="uploadBtn" disabled>Upload Recording</button>
+    </center>
+    <br><br>
+    <hr>
+    <div id="progressContainer">
+        <center><h3>Processing file...</h3></center>
+        <div id="progressBar"></div>
+        <br>
     </div>
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+
+        const recordBtn = document.getElementById('recordBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const audio = document.getElementById('audio');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+
+        function startProgress() {
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            let width = 0;
+            const interval = setInterval(() => {
+                if (width >= 100) {
+                    clearInterval(interval);
+                } else {
+                    width += 1;
+                    progressBar.style.width = width + '%';
+                }
+            }, 30); // adjust speed here
+        }
+
+        recordBtn.onclick = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.start();
+            audioChunks = [];
+
+            mediaRecorder.addEventListener("dataavailable", event => {
+                audioChunks.push(event.data);
+            });
+
+            mediaRecorder.addEventListener("stop", async () => {
+                const blob = new Blob(audioChunks, { type: 'audio/webm' }); // don't fake wav here
+                const arrayBuffer = await blob.arrayBuffer();
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+                const wavBlob = encodeWAV(audioBuffer); // convert to real wav
+                audio.src = URL.createObjectURL(wavBlob);
+                audio.blob = wavBlob;
+                uploadBtn.disabled = false;
+            });
+
+            recordBtn.disabled = true;
+            stopBtn.disabled = false;
+        };
+
+        stopBtn.onclick = () => {
+            mediaRecorder.stop();
+            recordBtn.disabled = false;
+            stopBtn.disabled = true;
+        };
+
+        uploadBtn.onclick = () => {
+            const formData = new FormData();
+            formData.append('file', audio.blob, 'recording.wav');
+            formData.append('instrument', document.getElementById('instrument').value);
+
+            startProgress();
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            }).then(response => {
+                if (response.redirected) {
+                    window.location.href = response.url;
+                } else {
+                    alert("Upload failed");
+                }
+            });
+        };
+
+        function encodeWAV(audioBuffer) {
+            const numChannels = audioBuffer.numberOfChannels;
+            const sampleRate = audioBuffer.sampleRate;
+            const format = 1; // PCM
+            const bitDepth = 16;
+
+            let samples;
+            if (numChannels === 2) {
+                const left = audioBuffer.getChannelData(0);
+                const right = audioBuffer.getChannelData(1);
+                samples = interleave(left, right);
+            } else {
+                samples = audioBuffer.getChannelData(0);
+            }
+
+            const buffer = new ArrayBuffer(44 + samples.length * 2);
+            const view = new DataView(buffer);
+
+            function writeString(view, offset, string) {
+                for (let i = 0; i < string.length; i++) {
+                    view.setUint8(offset + i, string.charCodeAt(i));
+                }
+            }
+
+            function floatTo16BitPCM(output, offset, input) {
+                for (let i = 0; i < input.length; i++, offset += 2) {
+                    let s = Math.max(-1, Math.min(1, input[i]));
+                    s = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    output.setInt16(offset, s, true);
+                }
+            }
+
+            writeString(view, 0, 'RIFF');
+            view.setUint32(4, 36 + samples.length * 2, true);
+            writeString(view, 8, 'WAVE');
+            writeString(view, 12, 'fmt ');
+            view.setUint32(16, 16, true); // Subchunk1Size
+            view.setUint16(20, format, true); // AudioFormat
+            view.setUint16(22, numChannels, true);
+            view.setUint32(24, sampleRate, true);
+            view.setUint32(28, sampleRate * numChannels * bitDepth / 8, true);
+            view.setUint16(32, numChannels * bitDepth / 8, true);
+            view.setUint16(34, bitDepth, true);
+            writeString(view, 36, 'data');
+            view.setUint32(40, samples.length * 2, true);
+
+            floatTo16BitPCM(view, 44, samples);
+
+            return new Blob([view], { type: 'audio/wav' });
+        }
+
+        function interleave(left, right) {
+            const length = left.length + right.length;
+            const result = new Float32Array(length);
+            let inputIndex = 0;
+            for (let index = 0; index < length;) {
+                result[index++] = left[inputIndex];
+                result[index++] = right[inputIndex];
+                inputIndex++;
+            }
+            return result;
+        }
+
+        // Add progress bar for regular upload
+        document.getElementById('uploadForm').onsubmit = () => {
+            startProgress();
+        };
+    </script>
 </body>
 </html>
