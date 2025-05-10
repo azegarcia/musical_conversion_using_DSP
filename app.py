@@ -51,13 +51,18 @@ def pitch_to_lilypond(note):
     return lily_note + "4"
 
 def identify_instrument(instrument):
-    return {
-        "Bass": "bass_map.json",
-        "Flute": "flute_map.json",
-        "Piano": "notes_map.json",
-        "Saxophone": "saxo_map.json",
-        "Violin": "violin_map.json"
-    }.get(instrument, "notes_map.json")
+    if instrument == "Bass":
+        notes_map = "bass_map.json"
+    elif instrument == "Flute":
+        notes_map = "flute_map.json"
+    elif instrument == "Piano":
+        notes_map = "notes_map.json"
+    elif instrument == "Saxophone":
+        notes_map = "saxo_map.json"
+    else:
+        notes_map = "violin_map.json"
+    
+    return notes_map
 
 def identify_clef(instrument):
     if instrument == "Flute":
@@ -77,10 +82,12 @@ def process_audio(filepath, instrument):
     notes_map_file = identify_instrument(instrument)
     NOTES_MAP = json.load(open(notes_map_file, "r"))
     
+    print("Reading wav file..")
     SAMPLE_RATE, data = wav.read(filepath)
     DURATION = len(data) // SAMPLE_RATE
 
     t = np.arange(SAMPLE_RATE * DURATION)
+    print("Plotting magnitudes..")
     plt.plot(t, data[:SAMPLE_RATE*DURATION])
     plt.savefig('static/magnitude.png')
     plt.close()
@@ -88,13 +95,18 @@ def process_audio(filepath, instrument):
     yf = fft(data[:SAMPLE_RATE*DURATION])
     xf = fftfreq(SAMPLE_RATE*DURATION, 1 / SAMPLE_RATE)
     plt.plot(xf, np.abs(yf))
+    print("Plotting frequencies..")
     plt.xlim([0, 3e3])
     plt.savefig('static/frequency.png')
     plt.close()
 
+    print("Sorting frequencies..")
     y = np.abs(yf)
-    d = {f"{xf[i]}": y[i] for i in range(len(y)) if xf[i] > 0}
-    d = sorted(d, key=lambda x: float(x), reverse=True)
+    d = {}
+    for i in range(0, len(y)):
+        if xf[i] > 0:
+            d[f"{xf[i]}"] = y[i]
+    d = sorted(d, reverse=True)
 
     bucket = []
     for i in d:
@@ -102,6 +114,7 @@ def process_audio(filepath, instrument):
         if val not in bucket:
             bucket.append(val)
 
+    print("Mapping notes..")
     notes = []
     for freq in bucket:
         for note, note_freq in NOTES_MAP.items():
