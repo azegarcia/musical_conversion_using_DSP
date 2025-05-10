@@ -77,83 +77,113 @@ def identify_clef(instrument):
         clef = "clef treble"
         
     return clef
-        
+
+def insert_line_breaks(note_list, notes_per_line=8):
+    lines = []
+    for i in range(0, len(note_list), notes_per_line):
+        chunk = ' '.join(note_list[i:i+notes_per_line])
+        lines.append(chunk + " \\break")
+    return '\n'.join(lines)
+
 def process_audio(filepath, instrument):
     notes_map_file = identify_instrument(instrument)
     NOTES_MAP = json.load(open(notes_map_file, "r"))
     
     print("Reading wav file..")
     SAMPLE_RATE, data = wav.read(filepath)
-    DURATION = len(data) // SAMPLE_RATE
 
-    t = np.arange(SAMPLE_RATE * DURATION)
+    # If stereo, convert to mono by averaging channels
+    if len(data.shape) > 1:
+        data = data.mean(axis=1)
+
+    DURATION = len(data) / SAMPLE_RATE  # Duration in seconds
+    t = np.linspace(0., DURATION, len(data))  # Time axis
+
     print("Plotting magnitudes..")
-    plt.plot(t, data[:SAMPLE_RATE*DURATION])
+    plt.figure(figsize=(10, 4))
+    plt.plot(t, data)
+    plt.title("Waveform")
+    plt.xlabel("Time [s]")
+    plt.ylabel("Amplitude")
+    plt.tight_layout()
     plt.savefig('static/magnitude.png')
     plt.close()
 
-    yf = fft(data[:SAMPLE_RATE*DURATION])
-    xf = fftfreq(SAMPLE_RATE*DURATION, 1 / SAMPLE_RATE)
-    plt.plot(xf, np.abs(yf))
+    # Perform FFT
+    yf = fft(data)
+    xf = fftfreq(len(data), 1 / SAMPLE_RATE)
+
     print("Plotting frequencies..")
-    plt.xlim([0, 3e3])
+    plt.figure(figsize=(10, 4))
+    plt.plot(xf[:len(xf)//2], np.abs(yf[:len(yf)//2]))  # Only positive frequencies
+    plt.title("Frequency Spectrum")
+    plt.xlabel("Frequency [Hz]")
+    plt.ylabel("Magnitude")
+    plt.xlim([0, 3000])  # Limit to 3 kHz for visibility
+    plt.tight_layout()
     plt.savefig('static/frequency.png')
     plt.close()
 
     print("Sorting frequencies..")
-    y = np.abs(yf)
-    d = {}
-    for i in range(0, len(y)):
-        if xf[i] > 0:
-            d[f"{xf[i]}"] = y[i]
-    d = sorted(d, reverse=True)
+    y = np.abs(yf[:len(yf)//2])
+    x = xf[:len(xf)//2]
+
+    freq_magnitude_pairs = list(zip(x, y))
+    freq_magnitude_pairs = sorted(freq_magnitude_pairs, key=lambda pair: pair[1], reverse=True)
 
     bucket = []
-    for i in d:
-        val = round(float(i))
-        if val not in bucket:
+    for freq, _ in freq_magnitude_pairs:
+        val = round(freq)
+        if val > 0 and val not in bucket:
             bucket.append(val)
+        if len(bucket) >= 100:  # Limit number of frequencies to map
+            break
 
     print("Mapping notes..")
     notes = []
-    for freq in bucket:
-        for note, note_freq in NOTES_MAP.items():
-            if freq - 4 < note_freq < freq + 4:
+    for i in bucket:
+        for note in NOTES_MAP:
+            note_freq = NOTES_MAP[note]
+            if abs(i - note_freq) <= 4:
                 notes.append(note)
                 break
-
+    
+    print("Notes mapped: {}".format(notes))
     lilypond_notes = [pitch_to_lilypond(n) for n in notes]
-    note_string = ' '.join(lilypond_notes)
+    note_string = insert_line_breaks(lilypond_notes, notes_per_line=12)
 
-    title = filepath.split(".")[0]
+    title = os.path.splitext(os.path.basename(filepath))[0]
     clef = identify_clef(instrument)
     ly_content = f"""
     \\version "2.22.2"
     \\header {{
-        title = "{title.split('\\')[-1]}"
+        title = "{title}"
         subtitle = "Instrument: {instrument}"
         composer = ""
         arranger = ""
         opus = "Op. 1"
         }}
-    \\score {{
-    \\new Staff {{
-        \\{clef}
-        \\time 4/4
-        \\tempo 4 = 80
-        {note_string}
-    }}
-    \\layout {{ }}
-    }}
+        \\score {{
+            \\new Staff {{
+                \\{clef}
+                \\time 4/4
+                \\tempo 4 = 80
+                {note_string}
+            }}
+            \\layout {{
+                \\override SpacingSpanner.base-shortest-duration = #(ly:make-moment 1/4)
+            }}
+        }}
     """
-    
+
     with open("output.ly", "w") as f:
         f.write(ly_content)
 
     try:
         subprocess.run(["C:\\LilyPond\\usr\\bin\\lilypond.exe", "output.ly"], check=True)
         return "output.pdf"
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        print(f"Lilypond generation failed: {e}")
         return None
 
 @app.route('/')
